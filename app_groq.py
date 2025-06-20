@@ -8,6 +8,7 @@ import requests
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from flask_bcrypt import Bcrypt
+from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from dotenv import load_dotenv
 
@@ -15,6 +16,7 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 app = Flask(__name__)
+CORS(app)  # ✅ Add this lin
 app.config['JWT_SECRET_KEY'] = 'your-secret-key'
 jwt = JWTManager(app)
 bcrypt = Bcrypt(app)
