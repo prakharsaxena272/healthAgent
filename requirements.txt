@@ -1,0 +1,6 @@
+flask
+flask-bcrypt
+flask-jwt-extended
+requests
+python-dotenv
+gunicorn
