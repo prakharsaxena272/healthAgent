@@ -147,7 +147,6 @@ def debug_logs():
     conn.close()
 
     return jsonify({"recent_food_logs": food, "recent_mood_logs": mood})
-
 @app.route("/log-agent", methods=["POST"])
 @jwt_required()
 def log_agent():
@@ -156,14 +155,24 @@ def log_agent():
     date = datetime.now().strftime('%Y-%m-%d')
     time = datetime.now().strftime('%H:%M:%S')
 
-    logging.info(f"[LOG-AGENT] User {user_id} submitted: {text}")
-    classify_prompt = f"Respond with one word: food, mood, or both. Text: {text}"
-    classification = call_groq(classify_prompt).strip().lower()
-    classification = classification.split()[0]  # extract only the first word if sentence comes
+    # 1. CLASSIFICATION
+    classify_prompt = f"Classify the text into one of: food, mood, both, nothing , basis what end user is eating or doing fron=m his text message . \nText: {text}\nRespond with a single word."
+    classification = call_groq(classify_prompt).strip().lower().split()[0]
 
-    logging.info(f"[GROQ-CLASSIFICATION] Result → {classification}")
-    response = {"classification": classification, "timestamp": f"{date} {time}"}
+    # 2. FRIENDLY RESPONSE
+    reply_prompt = f"You're a friendly AI health coach. Reply to this user input with a warm, engaging sentence.\nInput: {text}"
+    ai_chat_response = call_groq(reply_prompt).strip()
 
+    logging.info(f"[CLASSIFICATION] → {classification}")
+    logging.info(f"[AI-RESPONSE] → {ai_chat_response}")
+
+    response = {
+        "classification": classification,
+        "timestamp": f"{date} {time}",
+        "response_message": ai_chat_response
+    }
+
+    # 3. INTERNAL LOGGING
     if classification == "both":
         response["mood_log"] = log_mood_internal(user_id, text, date, time)
         response["food_log"] = log_food_internal(user_id, text, date, time)
@@ -171,8 +180,7 @@ def log_agent():
         response["food_log"] = log_food_internal(user_id, text, date, time)
     elif classification == "mood":
         response["mood_log"] = log_mood_internal(user_id, text, date, time)
-    else:
-        logging.warning(f"[LOG-AGENT] Invalid classification received: {classification}")
+
     return jsonify(response)
 
 def log_food_internal(user_id, text, date, time):
