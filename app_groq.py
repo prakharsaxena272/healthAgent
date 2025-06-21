@@ -1,4 +1,4 @@
-# Improved version with timestamp support, better classification reliability, and full logging
+# Improved version with prompt fix to avoid overestimation of quantities
 
 import os
 import json
@@ -16,7 +16,7 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 app = Flask(__name__)
-CORS(app)  # ✅ Add this lin
+CORS(app)
 app.config['JWT_SECRET_KEY'] = 'your-secret-key'
 jwt = JWTManager(app)
 bcrypt = Bcrypt(app)
@@ -94,8 +94,6 @@ def login():
         return jsonify(token=token)
     return jsonify(message="Invalid credentials"), 401
 
-# Add missing endpoints to support /summary and /debug/logs
-
 @app.route("/summary", methods=["GET"])
 @jwt_required()
 def summary():
@@ -121,32 +119,19 @@ def summary():
 
     return jsonify({"food_logs": food_logs, "mood_logs": mood_logs})
 
-
 @app.route("/debug/logs", methods=["GET"])
 @jwt_required()
 def debug_logs():
     user_id = get_jwt_identity()
     conn = get_db()
     cur = conn.cursor()
-
-    cur.execute("""
-        SELECT * FROM logs
-        WHERE user_id = ?
-        ORDER BY id DESC
-        LIMIT 5
-    """, (user_id,))
+    cur.execute("SELECT * FROM logs WHERE user_id = ? ORDER BY id DESC LIMIT 5", (user_id,))
     food = [dict(row) for row in cur.fetchall()]
-
-    cur.execute("""
-        SELECT * FROM mood_logs
-        WHERE user_id = ?
-        ORDER BY id DESC
-        LIMIT 5
-    """, (user_id,))
+    cur.execute("SELECT * FROM mood_logs WHERE user_id = ? ORDER BY id DESC LIMIT 5", (user_id,))
     mood = [dict(row) for row in cur.fetchall()]
     conn.close()
-
     return jsonify({"recent_food_logs": food, "recent_mood_logs": mood})
+
 @app.route("/log-agent", methods=["POST"])
 @jwt_required()
 def log_agent():
@@ -155,11 +140,9 @@ def log_agent():
     date = datetime.now().strftime('%Y-%m-%d')
     time = datetime.now().strftime('%H:%M:%S')
 
-    # 1. CLASSIFICATION
-    classify_prompt = f"Classify the text into one of: food, mood, both, nothing , basis what end user is eating or doing fron=m his text message . \nText: {text}\nRespond with a single word."
+    classify_prompt = f"Classify the text into one of: food, mood, both, nothing , basis what end user is eating or doing from their text message.\nText: {text}\nRespond with a single word."
     classification = call_groq(classify_prompt).strip().lower().split()[0]
 
-    # 2. FRIENDLY RESPONSE
     reply_prompt = f"You're a friendly AI health coach. Reply to this user input with a warm, engaging sentence.\nInput: {text}"
     ai_chat_response = call_groq(reply_prompt).strip()
 
@@ -172,7 +155,6 @@ def log_agent():
         "response_message": ai_chat_response
     }
 
-    # 3. INTERNAL LOGGING
     if classification == "both":
         response["mood_log"] = log_mood_internal(user_id, text, date, time)
         response["food_log"] = log_food_internal(user_id, text, date, time)
@@ -184,7 +166,11 @@ def log_agent():
     return jsonify(response)
 
 def log_food_internal(user_id, text, date, time):
-    prompt = f"Extract food items and quantity (JSON format). Example: [{{\"item\":\"oats\",\"quantity\":1}}]. Text: {text}"
+    prompt = (
+        "Extract food items and estimate quantity in servings (1 serving ~100ml/gram or 1 piece). "
+        "Output as JSON list like: [{\"item\": \"milk\", \"quantity\": 1}]. "
+        f"Text: {text}"
+    )
     items_json = call_groq(prompt)
     try:
         parsed = json.loads(items_json[items_json.find('['):items_json.rfind(']') + 1])
@@ -196,6 +182,14 @@ def log_food_internal(user_id, text, date, time):
     for food in parsed:
         item = food.get("item")
         qty = food.get("quantity", 1)
+
+        # Correction logic for outlier values
+        if qty > 10 and "ml" in text.lower():
+            qty = round(qty / 250) or 1
+        elif qty > 10:
+            logging.warning(f"[LOG WARNING] Unusual quantity for {item}: {qty}. Clipping to 1.")
+            qty = 1
+
         nutri = fetch_nutrition(item)
         if nutri:
             items.append(f"{qty} x {nutri['description']}")
